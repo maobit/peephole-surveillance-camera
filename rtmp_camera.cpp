@@ -32,6 +32,10 @@
 #include <signal.h>
 #include <string>
 
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+
 #include "aw/vencoder.h"
 #include "libyuv.h"
 
@@ -49,6 +53,9 @@
 #include "librtmp/amf.h"
 
 #define MOTION_FLAG_FILE "/tmp/motion_sense"
+#define MOTION_THRESH 10
+
+using namespace cv;
 
 // Hold command line options values...
 static CmdLineOptions g_options;
@@ -77,6 +84,21 @@ extern unsigned char *m_pFileBuf;
 extern unsigned char *m_pFileBuf_tmp;
 extern unsigned char* m_pFileBuf_tmp_old;  //used for realloc
 
+Mat cameraYUV = Mat::zeros(mheight * 1.5, mwidth, CV_8UC1);
+Mat cameraBGR = Mat::zeros(mheight, mwidth, CV_8UC3);
+
+// for motion Detection
+Mat preVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
+Mat curVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
+Mat nextVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
+Mat dist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
+Mat blurDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
+Mat threDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
+Mat meanDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
+Mat stdDist(1, 1, CV_8UC1);
+char text[100] = {0};
+
+
 unsigned int tick = 0;
 unsigned int tick_gap = 0;
 
@@ -86,22 +108,47 @@ int sps_pps_send = 0;
 
 #define WATERMARK
 
-unsigned char enc_buffer[2560 * 1920] = {0};  // ����������Ƶ buffer
+unsigned char enc_buffer[2560 * 1920] = {0};
 
 typedef struct Venc_context {
-    VideoEncoder *pVideoEnc;     // ��Ƶ������ָ��
-    VencBaseConfig base_cfg;      // ��������������
-    AWCameraDevice *CameraDevice; // ������
+    VideoEncoder *pVideoEnc;
+    VencBaseConfig base_cfg;
+    AWCameraDevice *CameraDevice;
     WaterMark      *waterMark;
-    pthread_t thread_enc_id;      // ����ͷ�����������߳�
+    pthread_t thread_enc_id;
     int mstart;
-    int fd_in;                   // �ܵ������ļ�����
-} Venc_context;                   // ������������
+    int fd_in;
+} Venc_context;
 
 
 SimpleFIFO<VencInputBuffer, 2> g_inFIFO;
 pthread_cond_t g_cond(PTHREAD_COND_INITIALIZER);
 pthread_mutex_t g_mutex(PTHREAD_MUTEX_INITIALIZER);
+
+void distMapGray(const Mat &a, const Mat &b, Mat &out) {
+	#pragma omp parallel
+	for(int y = 0; y < a.rows; ++y){
+		for(int x = 0; x < a.cols; ++x){
+			int summary = pow(a.at<uchar>(y, x) - b.at<uchar>(y, x), 2);
+			out.at<uchar>(y, x) = (int) sqrt(summary);
+		}
+	}
+}
+
+
+void distMapBGR(const Mat &a, const Mat &b, Mat &out){
+	#pragma omp parallel
+	for(int y = 0; y < a.rows; ++y){
+		for(int x = 0; x < a.cols; ++x){
+			int summary = 0;
+			for(int z = 0; z < a.dims; ++z){
+				summary += pow(a.at<Vec3b>(y, x)[z] - b.at<Vec3b>(y, x)[z], 2);
+			}
+			out.at<uchar>(y, x) = (int) (255.0 * sqrt(summary) / sqrt(3 * pow(255, 2)));
+		}
+	}
+}
+
 
 void process_in_buffer(Venc_context *venc_cxt, VencInputBuffer *input_buffer);
 
@@ -211,8 +258,18 @@ int CameraSourceCallback(void *cookie, void *data) {
 
     //LOGD("Cam - p_buf->index = %d\n", p_buf->index);
 
+    // camera source buffer, format YUYV
     unsigned char *buffer = (unsigned char *) p_v4l2_mem_map->mem[p_buf->index];
     //int size_y = venc_cam_cxt->base_cfg.nInputWidth*venc_cam_cxt->base_cfg.nInputHeight;
+
+    //memcpy(cameraYUV.data, buffer, sizeof(unsigned char) * 2 * mwidth * mheight);
+    // cameraYUV.data = buffer;
+    //cvtColor(cameraYUV, cameraBGR, CV_YUV2BGR_YUYV);
+    // printf("%d %d %d\n", cameraBGR.at<Vec3b>(50, 50)[0], cameraBGR.at<Vec3b>(50, 50)[1], cameraBGR.at<Vec3b>(50, 50)[2]);
+    // imshow("cameraBGR", cameraBGR);
+    // waitKey(1);
+    // imshow("cameraYUV", cameraYUV);
+    // imwrite("cameraBGR.jpg", cameraBGR);
 
     memset(&input_buffer, 0, sizeof(VencInputBuffer));
     result = GetOneAllocInputBuffer(pVideoEnc, &input_buffer);
@@ -230,6 +287,39 @@ int CameraSourceCallback(void *cookie, void *data) {
     if (CameraDevice->isYUYV) { // YUYV
         libyuv::YUY2ToNV12(buffer, mwidth * 2, input_buffer.pAddrVirY, mwidth,
                            input_buffer.pAddrVirC, mwidth, mwidth, mheight);
+
+        memcpy(cameraYUV.data, input_buffer.pAddrVirY, sizeof(unsigned char) * mheight * mwidth);
+        memcpy(cameraYUV.data + mheight * mwidth, input_buffer.pAddrVirC, sizeof(unsigned char) * 0.5 * mheight * mwidth);
+
+        cvtColor(cameraYUV, nextVideoFrame, CV_YUV2BGR_NV12);
+
+        distMapBGR(preVideoFrame, nextVideoFrame, dist);
+
+  			curVideoFrame.copyTo(preVideoFrame);
+  			nextVideoFrame.copyTo(curVideoFrame);
+
+  			blur(dist, blurDist, Size(3, 3));
+
+  			threshold(blurDist, threDist, 100, 255, THRESH_BINARY);
+
+  			meanStdDev(threDist, meanDist, stdDist);
+
+  			sprintf(text, "Standard Deviation - %d", stdDist.at<uchar>(0, 0));
+
+  			cv::putText(curVideoFrame, text, Point(70, 70), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 25);
+
+  			if(stdDist.at<uchar>(0, 0) > MOTION_THRESH) {
+  				printf("%d motion detected\r", stdDist.at<uchar>(0, 0));
+  				fflush(stdout);
+  			}
+
+  			imshow("distMap", blurDist);
+  			imshow("preview", curVideoFrame);
+
+
+        // imshow("gray", framePrev);
+        waitKey(1);
+
          // set watermark
          venc_cam_cxt->waterMark->bgInfo.y = (unsigned char *) input_buffer.pAddrVirY;
          venc_cam_cxt->waterMark->bgInfo.c = (unsigned char *) input_buffer.pAddrVirC;
@@ -277,14 +367,14 @@ static void *encoder_thread(void *pThreadData) {
         totalframes++;
         time(&tcurrent);
 
-        if ((tcurrent - tlast) > 1) {
-            printf("frames/sec: %d\r", framecount);
-            fflush(stdout);
-            tlast = tcurrent;
-            framecount = 0;
-        } else {
-            framecount++;
-        }
+        // if ((tcurrent - tlast) > 1) {
+        //     printf("frames/sec: %d\r", framecount);
+        //     fflush(stdout);
+        //     tlast = tcurrent;
+        //     framecount = 0;
+        // } else {
+        //     framecount++;
+        // }
 
         doBuffer = false;
         pthread_mutex_lock(&g_mutex);
@@ -404,7 +494,7 @@ int main(int argc, char **argv) {
     baseConfig.nDstHeight = dst_height;
 
     if (g_options.input == "/dev/video0") {
-        baseConfig.eInputFormat = VENC_PIXEL_YUV420SP;    // alias for NV12
+        baseConfig.eInputFormat = VENC_PIXEL_YUV420SP;    // alias for NV21
     } else {
         baseConfig.eInputFormat = VENC_PIXEL_YUV420SP;  // I420
     }
