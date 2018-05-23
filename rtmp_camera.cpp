@@ -38,6 +38,8 @@
 #include <opencv2/imgproc/imgproc.hpp>
 
 #include "aw/vencoder.h"
+#define LOG_TAG "rtmp_camera"
+#include "aw/CDX_Debug.h"
 #include "libyuv.h"
 
 #include "Camera/CameraSource.h"
@@ -210,10 +212,10 @@ void write_bitstream(Venc_context *venc_cxt) {
             strftime(save_path, 50, "record/%Y%m%d", local);
             strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
             if(!mkdirs(save_path)) {
-                printf("video_file %s\n", video_file);
+                // LOGD("video_file %s.", video_file);
                 fpRecord = fopen(video_file, "wb");
                 if(fpRecord) {
-                    printf("%s Created success!\n", video_file);
+                    LOGD("%s Created success!", video_file);
                 }
             }
         }
@@ -226,6 +228,7 @@ void write_bitstream(Venc_context *venc_cxt) {
                 record_start = 0;
                 if(fpRecord) {
                     fclose(fpRecord);
+                    LOGD("fpRecord Closed success!");
                     fpRecord = NULL;
                 }
             }
@@ -268,16 +271,6 @@ void process_in_buffer(Venc_context *venc_cxt, VencInputBuffer *input_buffer) {
     VideoEncoder *pVideoEnc = venc_cxt->pVideoEnc;
     int result = 0;
 
-    //	VencOutputBuffer output_buffer;
-
-    //struct timeval tmNow;
-    //gettimeofday (&tmNow, NULL );
-    //input_buffer->nPts = 1000000*(long long)tmNow.tv_sec + (long long)tmNow.tv_usec;
-    //input_buffer->nPts = 900000*(long long)tmNow.tv_sec + (long long)tmNow.tv_usec;
-    //long long nPts = 1000000 * (long long)tmNow.tv_sec + (long long)tmNow.tv_usec;
-    //nPts = 9*(nPts/10);
-    //input_buffer->nPts  = nPts;
-    //printf("Cam - flush...\n" );
     result = FlushCacheAllocInputBuffer(pVideoEnc, input_buffer);
     if (result < 0) {
         printf("Flush alloc error.\n");
@@ -287,9 +280,6 @@ void process_in_buffer(Venc_context *venc_cxt, VencInputBuffer *input_buffer) {
         printf("Add one input buffer\n");
     }
     result = VideoEncodeOneFrame(pVideoEnc);
-    //printf("Cam - encode res = %d\n", result );
-    // Update any output with RAWVIDEO data from the camera
-    // in NV12 format....
 
     AlreadyUsedInputBuffer(pVideoEnc, input_buffer);
     ReturnOneAllocInputBuffer(pVideoEnc, input_buffer);
@@ -340,11 +330,6 @@ int CameraSourceCallback(void *cookie, void *data) {
         return 0;
     }
 
-    //LOGW("input buffer size=(%x) %d", p_buf->length, p_buf->length );
-    //input_buffer.nPts  =   1000000 * (long long)p_buf->timestamp.tv_sec + (long long)p_buf->timestamp.tv_usec;
-    //long long nPts = 1000000*(long long)p_buf->timestamp.tv_sec + (long long)p_buf->timestamp.tv_usec;
-    //nPts = 9*(nPts/10);
-    //input_buffer.nPts  = nPts;
     if (CameraDevice->isYUYV) { // YUYV
         libyuv::YUY2ToNV12(buffer, mwidth * 2, input_buffer.pAddrVirY, mwidth,
                            input_buffer.pAddrVirC, mwidth, mwidth, mheight);
@@ -372,17 +357,17 @@ int CameraSourceCallback(void *cookie, void *data) {
   			cv::putText(curVideoFrame, text, Point(20, 20), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 20);
 
   			if(stdDist.at<uchar>(0, 0) > MOTION_THRESH) {
-          motion_flag = 1;
+                motion_flag = 1;
   				printf("%d motion detected\r", stdDist.at<uchar>(0, 0));
   				fflush(stdout);
   			} else {
-          motion_flag = 0;
-        }
+              motion_flag = 0;
+            }
 
-  			imshow("distMap", blurDist);
-  			imshow("preview", curVideoFrame);
-
-        waitKey(1);
+  		// imshow("distMap", blurDist);
+  		// imshow("preview", curVideoFrame);
+        //
+        // waitKey(1);
 
          // set watermark
          venc_cam_cxt->waterMark->bgInfo.y = (unsigned char *) input_buffer.pAddrVirY;
@@ -405,7 +390,6 @@ int CameraSourceCallback(void *cookie, void *data) {
         ReturnOneAllocInputBuffer(pVideoEnc, &input_buffer);
     }
 
-    //printf( "C");
     return 0;
 }
 
@@ -521,17 +505,6 @@ int main(int argc, char **argv) {
     printf("Y_size = %d\n", Y_size);
     printf("UV_size = %d\n", UV_size);
 
-    //intraRefresh
-    //VencCyclicIntraRefresh sIntraRefresh;
-    //sIntraRefresh.bEnable = 1;
-    //sIntraRefresh.nBlockNumber = 10;
-
-    //fix qp mode
-    //VencH264FixQP fixQP;
-    //fixQP.bEnable = 1;
-    //fixQP.nIQp = g_options.qMin;
-    //fixQP.nPQp = g_options.qMax;
-
     //* h264 param
     h264Param.bEntropyCodingCABAC = 1;
     h264Param.nBitrate = 1024 * g_options.bitrate; /* bps */
@@ -548,7 +521,6 @@ int main(int argc, char **argv) {
     memset(&baseConfig, 0, sizeof(VencBaseConfig));
     memset(&bufferParam, 0, sizeof(VencAllocateBufferParam));
 
-    // ���ñ�������������
     baseConfig.nInputWidth = src_width;
     baseConfig.nInputHeight = src_height;
     baseConfig.nStride = src_width;
@@ -563,12 +535,10 @@ int main(int argc, char **argv) {
     }
     // baseConfig.eInputFormat = VENC_PIXEL_YUYV422;  // YUYV
 
-    // buffer ��������
     bufferParam.nSizeY = baseConfig.nInputWidth * baseConfig.nInputHeight;
     bufferParam.nSizeC = baseConfig.nInputWidth * baseConfig.nInputHeight / 2;
     bufferParam.nBufferNum = 4;
 
-    // ����������
     printf("Creating Encoder...\n");
     pVideoEnc = VideoEncCreate(codecType);
     printf("Created Encoder: %p\n", pVideoEnc);
@@ -619,28 +589,22 @@ int main(int argc, char **argv) {
     input_size = mwidth * (mheight + mheight / 2);
     printf("InputSize=%d\n", input_size);
 
-    // ͨ�� vencoder ��������ͼ��֡ buffer
     AllocInputBuffer(pVideoEnc, &bufferParam);
 
     printf("create encoder ok\n");
 
-    // ��������ͷ
     bool cameraOn = true;
     venc_cxt->mstart = 1;
 
     // connect rtmp server
-    //��ʼ�������ӵ�������
     RTMP264_Connect(g_options.rtmpUrl.c_str());
 
-    /* create source ��������ͷԴ������������Ϣ*/
     venc_cxt->CameraDevice = CreateCamera(mwidth, mheight);
     printf("create camera ok\n");
-    /* set camera source callback ��������ͷԴ��callback*/
     venc_cxt->CameraDevice->setCameraDatacallback(venc_cxt->CameraDevice, (void *) venc_cxt,
                                                   (void *) &CameraSourceCallback);
-    // Pass Device name to Camera... ������Ҫ����������ͷ������
     venc_cxt->CameraDevice->deviceName = g_options.input.c_str();
-    /* start camera ��������ͷ*/
+
     venc_cxt->CameraDevice->startCamera(venc_cxt->CameraDevice);
     printf("Camera: is YUYV = %d\n", venc_cxt->CameraDevice->isYUYV);
     int w, h, fmt;
