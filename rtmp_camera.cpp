@@ -193,6 +193,44 @@ void write_bitstream(Venc_context *venc_cxt) {
         // printf("tick %d\n", tick);
         tick += tick_gap;
         bool bIsKeyFrame = (output_buffer.pData0[4] & 0x1f) == 0x05 ? true : false;
+
+        // record video if motion detected
+        int nowtime = time((time_t*)NULL);
+        // printf("record_start %d motion_flag %d\n", record_start, motion_flag);
+        if(!record_start && motion_flag) {  // not recording now and motion detected, start recording
+            record_start = nowtime;
+            // start recording, create directory and video file
+            time_t fptime;
+            fptime = time(NULL); //获取日历时间
+
+            struct tm *local;
+            local = localtime(&fptime);  //获取当前系统时间
+
+            char save_path[50], video_file[50];
+            strftime(save_path, 50, "record/%Y%m%d", local);
+            strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
+            if(!mkdirs(save_path)) {
+                printf("video_file %s\n", video_file);
+                fpRecord = fopen(video_file, "wb");
+                if(fpRecord) {
+                    printf("%s Created success!\n", video_file);
+                }
+            }
+        }
+
+        if(record_start && ((nowtime - record_start) >= record_peroid)) {  // still recoding and more than 5s
+            if(motion_flag) { // if motion detected, recording for another 5s
+                // keep recording for another 5s
+                record_start = nowtime;
+            } else {  // after recording for 5s, and there's no motion detected, stop recording
+                record_start = 0;
+                if(fpRecord) {
+                    fclose(fpRecord);
+                    fpRecord = NULL;
+                }
+            }
+        }
+
         if (output_buffer.nSize1) {
             // send h264 packet to rtmp server
             memcpy(enc_buffer, output_buffer.pData0, output_buffer.nSize0);
@@ -201,91 +239,22 @@ void write_bitstream(Venc_context *venc_cxt) {
             SendH264Packet(enc_buffer, totalSize, bIsKeyFrame, tick);
 
             // record video if motion detected
-            int nowtime = time((time_t*)NULL);
-            printf("record_start %d motion_flag %d\n", record_start, motion_flag);
-            if(!record_start && motion_flag) {  // not recording now and motion detected, start recording
-                record_start = nowtime;
-                // start recording, create directory and video file
-                time_t fptime;
-                fptime = time(NULL); //获取日历时间
-
-                struct tm *local;
-                local = localtime(&fptime);  //获取当前系统时间
-
-                char save_path[50], video_file[50];
-                strftime(save_path, 50, "record/%Y%m%d", local);
-                strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
-                //if(!mkdirs(save_path)) {
-                    fpRecord = fopen(video_file, "wb");
-                    printf("video_file %s\n", video_file);
-                    if(fpRecord) {
-                        printf("%s Created success!\n", video_file);
-                    }
-                // }
-            }
-
-            if(record_start && nowtime - record_start >= record_peroid) {  // still recoding and more than 5s
-                if(motion_flag) { // if motion detected, recording for another 5s
-                    // keep recording for another 5s
-                    record_start = nowtime;
-                } else {  // after recording for 5s, and there's no motion detected, stop recording
-                    record_start = 0;
-                    if(fpRecord) {
-                        printf("closing file\n");
-                        fclose(fpRecord);
-                        fpRecord = NULL;
-                    }
+            if(record_start) {  // recording time less than 5s, continue recording
+                if(bIsKeyFrame) {
+                    fwrite(sps_pps_data.pBuffer, sizeof(char), sps_pps_data.nLength, fpRecord);
                 }
-            } else {  // recording time less than 5s, continue recording
-
+                fwrite(enc_buffer, sizeof(char), totalSize, fpRecord);
             }
 
         } else {
             // send h264 packet to rtmp server
             SendH264Packet(output_buffer.pData0, output_buffer.nSize0, bIsKeyFrame, tick);
 
-            // record video if motion detected
-            int nowtime = time((time_t*)NULL);
-            // printf("record_start %d motion_flag %d\n", record_start, motion_flag);
-            if(!record_start && motion_flag) {  // not recording now and motion detected, start recording
-                record_start = nowtime;
-                // start recording, create directory and video file
-                time_t fptime;
-                fptime = time(NULL); //获取日历时间
-
-                struct tm *local;
-                local = localtime(&fptime);  //获取当前系统时间
-
-                char save_path[50], video_file[50];
-                strftime(save_path, 50, "record/%Y%m%d", local);
-                strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
-                if(!mkdirs(save_path)) {
-                    printf("video_file %s\n", video_file);
-                    fpRecord = fopen(video_file, "wb");
-                    if(fpRecord) {
-                        printf("%s Created success!\n", video_file);
-                    }
+            if(record_start) {  // recording time less than 5s, continue recording
+                if(bIsKeyFrame) {
+                    fwrite(sps_pps_data.pBuffer, sizeof(char), sps_pps_data.nLength, fpRecord);
                 }
-            }
-
-            if(record_start && ((nowtime - record_start) >= record_peroid)) {  // still recoding and more than 5s
-                if(motion_flag) { // if motion detected, recording for another 5s
-                    // keep recording for another 5s
-                    record_start = nowtime;
-                } else {  // after recording for 5s, and there's no motion detected, stop recording
-                    record_start = 0;
-                    if(fpRecord) {
-                        fclose(fpRecord);
-                        fpRecord = NULL;
-                    }
-                }
-            } else {  // recording time less than 5s, continue recording
-                if(fpRecord) {
-                    if(bIsKeyFrame) {
-                        fwrite(sps_pps_data.pBuffer, sizeof(char), sps_pps_data.nLength, fpRecord);
-                    }
-                    fwrite(output_buffer.pData0, sizeof(char), output_buffer.nSize0, fpRecord);
-                }
+                fwrite(output_buffer.pData0, sizeof(char), output_buffer.nSize0, fpRecord);
             }
         }
 
