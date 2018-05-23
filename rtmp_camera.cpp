@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <signal.h>
 #include <string>
 
@@ -52,8 +53,14 @@
 #include "librtmp/rtmp_sys.h"
 #include "librtmp/amf.h"
 
-#define MOTION_FLAG_FILE "/tmp/motion_sense"
+// for motion detection
 #define MOTION_THRESH 10
+#define CROP_X 182
+#define CROP_Y 109
+#define CROP_WIDTH 346
+#define CROP_HEIGHT 326
+#define DOWNSAMPLE_RATIO 2
+#define VIDEO_PATH "record"
 
 using namespace cv;
 
@@ -88,16 +95,20 @@ Mat cameraYUV = Mat::zeros(mheight * 1.5, mwidth, CV_8UC1);
 Mat cameraBGR = Mat::zeros(mheight, mwidth, CV_8UC3);
 
 // for motion Detection
-Mat preVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
-Mat curVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
-Mat nextVideoFrame = Mat::zeros(mheight, mwidth, CV_8UC3);
-Mat dist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
-Mat blurDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
-Mat threDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
-Mat meanDist(preVideoFrame.rows, preVideoFrame.cols, CV_8UC1);
+Mat preVideoFrame = Mat::zeros(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC3);
+Mat curVideoFrame = Mat::zeros(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC3);
+Mat nextVideoFrame = Mat::zeros(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC3);
+Mat dist(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC1);
+Mat blurDist(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC1);
+Mat threDist(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC1);
+Mat meanDist(CROP_HEIGHT / DOWNSAMPLE_RATIO, CROP_WIDTH / DOWNSAMPLE_RATIO, CV_8UC1);
 Mat stdDist(1, 1, CV_8UC1);
+Mat normalVideoFrame, smallVideoFrame, croppedVideoFrame;
 char text[100] = {0};
-
+int motion_flag = 0;
+int record_start = 0, record_end = 0;
+int record_peroid = 5;   // video length
+FILE *fpRecord = NULL;
 
 unsigned int tick = 0;
 unsigned int tick_gap = 0;
@@ -125,19 +136,8 @@ SimpleFIFO<VencInputBuffer, 2> g_inFIFO;
 pthread_cond_t g_cond(PTHREAD_COND_INITIALIZER);
 pthread_mutex_t g_mutex(PTHREAD_MUTEX_INITIALIZER);
 
-void distMapGray(const Mat &a, const Mat &b, Mat &out) {
-	#pragma omp parallel
-	for(int y = 0; y < a.rows; ++y){
-		for(int x = 0; x < a.cols; ++x){
-			int summary = pow(a.at<uchar>(y, x) - b.at<uchar>(y, x), 2);
-			out.at<uchar>(y, x) = (int) sqrt(summary);
-		}
-	}
-}
-
-
 void distMapBGR(const Mat &a, const Mat &b, Mat &out){
-	#pragma omp parallel
+	// #pragma omp parallel
 	for(int y = 0; y < a.rows; ++y){
 		for(int x = 0; x < a.cols; ++x){
 			int summary = 0;
@@ -149,14 +149,35 @@ void distMapBGR(const Mat &a, const Mat &b, Mat &out){
 	}
 }
 
+/**
+* creating directories if none existing
+*/
+int mkdirs(char *muldir) {
+    int i, len;
+    char str[512];
+    strncpy(str, muldir, 512);
+    len = strlen(str);
+    for(i=0; i<len; i++) {
+        if(str[i]=='/') {
+            str[i] = '\0';
+            if(access(str, 0)!=0) {
+                if(mkdir(str, 0777)) {
+                    return -1;
+                }
+            }
+            str[i]='/';
+        }
+    }
+    if(len > 0 && access(str, 0) != 0) {
+        if(mkdir(str, 0777)) {
+          return -1;
+        }
+    }
+    return 0;
+}
+
 
 void process_in_buffer(Venc_context *venc_cxt, VencInputBuffer *input_buffer);
-
-static void set_motion_flag() {
-    char buf[512];
-    sprintf(buf, "touch %s", MOTION_FLAG_FILE);
-    system(buf);
-}
 
 void write_bitstream(Venc_context *venc_cxt) {
     VideoEncoder *pVideoEnc = venc_cxt->pVideoEnc;
@@ -171,23 +192,103 @@ void write_bitstream(Venc_context *venc_cxt) {
 
         // printf("tick %d\n", tick);
         tick += tick_gap;
+        bool bIsKeyFrame = (output_buffer.pData0[4] & 0x1f) == 0x05 ? true : false;
         if (output_buffer.nSize1) {
+            // send h264 packet to rtmp server
             memcpy(enc_buffer, output_buffer.pData0, output_buffer.nSize0);
             memcpy(enc_buffer + output_buffer.nSize0, output_buffer.pData1, output_buffer.nSize1);
             int totalSize = output_buffer.nSize0 + output_buffer.nSize1;
-            bool bIsKeyFrame = (output_buffer.pData0[4] & 0x1f) == 0x05 ? true : false;
             SendH264Packet(enc_buffer, totalSize, bIsKeyFrame, tick);
+
+            // record video if motion detected
+            int nowtime = time((time_t*)NULL);
+            printf("record_start %d motion_flag %d\n", record_start, motion_flag);
+            if(!record_start && motion_flag) {  // not recording now and motion detected, start recording
+                record_start = nowtime;
+                // start recording, create directory and video file
+                time_t fptime;
+                fptime = time(NULL); //获取日历时间
+
+                struct tm *local;
+                local = localtime(&fptime);  //获取当前系统时间
+
+                char save_path[50], video_file[50];
+                strftime(save_path, 50, "record/%Y%m%d", local);
+                strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
+                //if(!mkdirs(save_path)) {
+                    fpRecord = fopen(video_file, "wb");
+                    printf("video_file %s\n", video_file);
+                    if(fpRecord) {
+                        printf("%s Created success!\n", video_file);
+                    }
+                // }
+            }
+
+            if(record_start && nowtime - record_start >= record_peroid) {  // still recoding and more than 5s
+                if(motion_flag) { // if motion detected, recording for another 5s
+                    // keep recording for another 5s
+                    record_start = nowtime;
+                } else {  // after recording for 5s, and there's no motion detected, stop recording
+                    record_start = 0;
+                    if(fpRecord) {
+                        printf("closing file\n");
+                        fclose(fpRecord);
+                        fpRecord = NULL;
+                    }
+                }
+            } else {  // recording time less than 5s, continue recording
+
+            }
+
         } else {
-            bool bIsKeyFrame = (output_buffer.pData0[4] & 0x1f) == 0x05 ? true : false;
+            // send h264 packet to rtmp server
             SendH264Packet(output_buffer.pData0, output_buffer.nSize0, bIsKeyFrame, tick);
+
+            // record video if motion detected
+            int nowtime = time((time_t*)NULL);
+            // printf("record_start %d motion_flag %d\n", record_start, motion_flag);
+            if(!record_start && motion_flag) {  // not recording now and motion detected, start recording
+                record_start = nowtime;
+                // start recording, create directory and video file
+                time_t fptime;
+                fptime = time(NULL); //获取日历时间
+
+                struct tm *local;
+                local = localtime(&fptime);  //获取当前系统时间
+
+                char save_path[50], video_file[50];
+                strftime(save_path, 50, "record/%Y%m%d", local);
+                strftime(video_file, 50, "record/%Y%m%d/%Y%m%d%H%M%S.h264", local);
+                if(!mkdirs(save_path)) {
+                    printf("video_file %s\n", video_file);
+                    fpRecord = fopen(video_file, "wb");
+                    if(fpRecord) {
+                        printf("%s Created success!\n", video_file);
+                    }
+                }
+            }
+
+            if(record_start && ((nowtime - record_start) >= record_peroid)) {  // still recoding and more than 5s
+                if(motion_flag) { // if motion detected, recording for another 5s
+                    // keep recording for another 5s
+                    record_start = nowtime;
+                } else {  // after recording for 5s, and there's no motion detected, stop recording
+                    record_start = 0;
+                    if(fpRecord) {
+                        fclose(fpRecord);
+                        fpRecord = NULL;
+                    }
+                }
+            } else {  // recording time less than 5s, continue recording
+                if(fpRecord) {
+                    if(bIsKeyFrame) {
+                        fwrite(sps_pps_data.pBuffer, sizeof(char), sps_pps_data.nLength, fpRecord);
+                    }
+                    fwrite(output_buffer.pData0, sizeof(char), output_buffer.nSize0, fpRecord);
+                }
+            }
         }
 
-        int motion_flag = 0;
-        //VideoEncGetParameter(pVideoEnc, VENC_IndexParamMotionDetectStatus, &motion_flag);
-        if (motion_flag == 1) {
-            set_motion_flag();
-            printf("motion_flag = %d\n", motion_flag);
-        }
         FreeOneBitStreamFrame(pVideoEnc, &output_buffer);
     } else {
         printf("Error getting bitstream\n");
@@ -262,15 +363,6 @@ int CameraSourceCallback(void *cookie, void *data) {
     unsigned char *buffer = (unsigned char *) p_v4l2_mem_map->mem[p_buf->index];
     //int size_y = venc_cam_cxt->base_cfg.nInputWidth*venc_cam_cxt->base_cfg.nInputHeight;
 
-    //memcpy(cameraYUV.data, buffer, sizeof(unsigned char) * 2 * mwidth * mheight);
-    // cameraYUV.data = buffer;
-    //cvtColor(cameraYUV, cameraBGR, CV_YUV2BGR_YUYV);
-    // printf("%d %d %d\n", cameraBGR.at<Vec3b>(50, 50)[0], cameraBGR.at<Vec3b>(50, 50)[1], cameraBGR.at<Vec3b>(50, 50)[2]);
-    // imshow("cameraBGR", cameraBGR);
-    // waitKey(1);
-    // imshow("cameraYUV", cameraYUV);
-    // imwrite("cameraBGR.jpg", cameraBGR);
-
     memset(&input_buffer, 0, sizeof(VencInputBuffer));
     result = GetOneAllocInputBuffer(pVideoEnc, &input_buffer);
     if (result < 0) {
@@ -291,7 +383,9 @@ int CameraSourceCallback(void *cookie, void *data) {
         memcpy(cameraYUV.data, input_buffer.pAddrVirY, sizeof(unsigned char) * mheight * mwidth);
         memcpy(cameraYUV.data + mheight * mwidth, input_buffer.pAddrVirC, sizeof(unsigned char) * 0.5 * mheight * mwidth);
 
-        cvtColor(cameraYUV, nextVideoFrame, CV_YUV2BGR_NV12);
+        cvtColor(cameraYUV, normalVideoFrame, CV_YUV2BGR_NV12);
+        croppedVideoFrame = normalVideoFrame(Rect(Point(CROP_X, CROP_Y), Size(CROP_WIDTH, CROP_HEIGHT)));
+        resize(croppedVideoFrame, nextVideoFrame, Size(), 1.0 / DOWNSAMPLE_RATIO, 1.0 / DOWNSAMPLE_RATIO);
 
         distMapBGR(preVideoFrame, nextVideoFrame, dist);
 
@@ -304,20 +398,21 @@ int CameraSourceCallback(void *cookie, void *data) {
 
   			meanStdDev(threDist, meanDist, stdDist);
 
-  			sprintf(text, "Standard Deviation - %d", stdDist.at<uchar>(0, 0));
+  			sprintf(text, "STD - %d", stdDist.at<uchar>(0, 0));
 
-  			cv::putText(curVideoFrame, text, Point(70, 70), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 25);
+  			cv::putText(curVideoFrame, text, Point(20, 20), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 20);
 
   			if(stdDist.at<uchar>(0, 0) > MOTION_THRESH) {
+          motion_flag = 1;
   				printf("%d motion detected\r", stdDist.at<uchar>(0, 0));
   				fflush(stdout);
-  			}
+  			} else {
+          motion_flag = 0;
+        }
 
   			imshow("distMap", blurDist);
   			imshow("preview", curVideoFrame);
 
-
-        // imshow("gray", framePrev);
         waitKey(1);
 
          // set watermark
@@ -357,7 +452,6 @@ static void *encoder_thread(void *pThreadData) {
     int framecount = 0, totalframes = 0;
 
     // Make sure a motion is set at startup....
-    set_motion_flag();
     bool doBuffer = false;
 
     time(&tlast);
@@ -551,7 +645,7 @@ int main(int argc, char **argv) {
 
     motionParam.nMotionDetectEnable = 1;
     motionParam.nMotionDetectRatio = 1; /* 0~12, 0 is the best sensitive */
-    //VideoEncSetParameter(pVideoEnc, VENC_IndexParamMotionDetectEnable, &motionParam );
+    VideoEncSetParameter(pVideoEnc, VENC_IndexParamMotionDetectEnable, &motionParam );
 
     input_size = mwidth * (mheight + mheight / 2);
     printf("InputSize=%d\n", input_size);
@@ -617,7 +711,6 @@ int main(int argc, char **argv) {
         pthread_join(venc_cxt->thread_enc_id, NULL);
     }
 
-    //�Ͽ����Ӳ��ͷ�������Դ
     RTMP264_Close();
 #ifdef WATERMARK
     waterMarkExit(venc_cxt->waterMark);
