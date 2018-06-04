@@ -23,7 +23,7 @@ CPP =g++
 STRIP = strip
 AR = ar
 
-TARGET=rtmp_camera
+TARGET=peephole_camera
 BUILDPATH=.
 
 SRCDIRS:=. Camera watermark
