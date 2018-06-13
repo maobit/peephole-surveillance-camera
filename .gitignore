@@ -33,3 +33,5 @@
 record
 rtmp_camera
 *.pdf
+core
+peephole_camera

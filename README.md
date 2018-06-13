@@ -17,12 +17,12 @@ It tested on Armbian OS. Clone this repository, and change the directory to the 
 Cedarx 'blobs' contains shared libraries for H264 hard encoding, so we have to install it correctly first. The following commands should run as root.
 - Extract shared libraries in `cedarx_blobs.tar.gz`
 ```shell
-cd /
-tar xzvf [root_of_git_repo]/blobs/cedarx_blobs.tar.gz
+$ cd /
+$ tar xzvf [root_of_git_repo]/blobs/cedarx_blobs.tar.gz
 ```
 - Config the `.so` libraries:
 ```shell
-nano "/etc/ld.so.conf.d/cedarx.conf"
+$ sudo vim /etc/ld.so.conf.d/cedarx.conf
 ```
 and add the content below
 ```shell
@@ -30,15 +30,15 @@ and add the content below
 ```
 - Once you save `cedarx.conf`, run:
 ```shell
-ldconfig
+$ sudo ldconfig
 ```
 
 ### 2. Build libyuv
 Just run following commands:
 ```shell
-cd libyuv/;
-make -f linux.mk CXX="g++ -mfpu=neon" libyuv.a;
-cd ../;
+$ cd libyuv/;
+$ make -f linux.mk CXX="g++ -mfpu=neon" libyuv.a;
+$ cd ../;
 ```
 
 ### 3. Build this repository
@@ -52,30 +52,31 @@ And here is a simple tutorial to build a rtmp server using nginx.
 - Download `PCRE` and install it
 
 ```shell
-wget ftp://ftp.csx.cam.ac.uk/pub/software/programming/pcre/pcre-8.38.tar.gz
-cd pcre-8.38
-./configure
-make
-make install (if not the root user, please use the sudo)
+$ wget ftp://ftp.csx.cam.ac.uk/pub/software/programming/pcre/pcre-8.38.tar.gz
+$ tar zxvf pcre-8.38.tar.gz
+$ cd pcre-8.38
+$ ./configure
+$ make
+$ make install (if not the root user, please use the sudo)
 ```
 - Download `nginx` and `nginx rtmp` and then install it
 
 ```shell
 # download nginx
-wget http://nginx.org/download/nginx-1.10.0.tar.gz  
+$ wget http://nginx.org/download/nginx-1.10.0.tar.gz  
 # uncompress nginx
-tar -zxvf nginx-1.10.0.tar.gz
+$ tar -zxvf nginx-1.10.0.tar.gz
 # download nginx-rtmp-module
-https://github.com/arut/nginx-rtmp-module.git
+$ git clone https://github.com/arut/nginx-rtmp-module.git
 # configure nginx
- ./configure --add-module=/path/to/nginx-rtmp-module
-make
-make install
+$ ./configure --add-module=/path/to/nginx-rtmp-module
+$ make
+$ make install
 ```
 - Supporting RTMP
 
 ```
-sudo vi conf/nginx.conf
+$ sudo vi conf/nginx.conf
 ```
 add following configuration
 ```
@@ -90,8 +91,9 @@ rtmp {
 }
 ```
 - Start nginx
+
 ```
-sudo /usr/local/sbin/nginx
+$ sudo /usr/local/sbin/nginx
 ```
 
 

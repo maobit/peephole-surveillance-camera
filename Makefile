@@ -38,7 +38,7 @@ SRCPPS=$(foreach dir,$(SRCDIRS),$(wildcard $(dir)/*.cpp))
 LIBOBJ=$(addprefix $(BUILDPATH)/, $(addsuffix .o, $(basename $(SRCCS))))
 LIBOBJ+=$(addprefix $(BUILDPATH)/, $(addsuffix .o, $(basename $(SRCPPS))))
 
-LDFLAGS= -ldl -fopenmp -lm -lpthread ./libyuv/libyuv.a ./librtmp/librtmp.a -lpthread -lssl  -lrt -g -lcrypto -lz `pkg-config --cflags --libs opencv`
+LDFLAGS= -ldl -lm -lpthread ./libyuv/libyuv.a ./librtmp/librtmp.a -lpthread -lssl  -lrt -g -lcrypto -lz `pkg-config --cflags --libs opencv`
 ifeq ($(shell pkg-config --exists cedarx; echo $$?),0)
 LDFLAGS += $(shell pkg-config --libs cedarx)
 else

@@ -36,9 +36,14 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/contrib/contrib.hpp>
+
+#include <iostream>
+#include <fstream>
+#include <sstream>
 
 #include "aw/vencoder.h"
-#define LOG_TAG "rtmp_camera"
+#define LOG_TAG "main"
 #include "aw/CDX_Debug.h"
 #include "libyuv.h"
 
@@ -65,6 +70,7 @@
 #define VIDEO_PATH "record"
 
 using namespace cv;
+using namespace std;
 
 // Hold command line options values...
 static CmdLineOptions g_options;
@@ -111,6 +117,19 @@ int motion_flag = 0;
 int record_start = 0, record_end = 0;
 int record_peroid = 5;   // video length
 FILE *fpRecord = NULL;
+
+
+// for face recognition
+string fn_haar = "/home/echo42/py/face/haarcascade_frontalface_default.xml";
+string fn_csv = "/home/echo42/motion_detctor/faces.csv";
+// These vectors hold the images and corresponding labels:
+vector<Mat> images;
+vector<int> labels;
+int im_width = 0;
+int im_height = 0;
+// Create a FaceRecognizer and train it on the given images:
+Ptr<FaceRecognizer> model;
+CascadeClassifier haar_cascade;
 
 unsigned int tick = 0;
 unsigned int tick_gap = 0;
@@ -338,41 +357,89 @@ int CameraSourceCallback(void *cookie, void *data) {
         memcpy(cameraYUV.data + mheight * mwidth, input_buffer.pAddrVirC, sizeof(unsigned char) * 0.5 * mheight * mwidth);
 
         cvtColor(cameraYUV, normalVideoFrame, CV_YUV2BGR_NV12);
+
+        // crop and resize frame
         croppedVideoFrame = normalVideoFrame(Rect(Point(CROP_X, CROP_Y), Size(CROP_WIDTH, CROP_HEIGHT)));
         resize(croppedVideoFrame, nextVideoFrame, Size(), 1.0 / DOWNSAMPLE_RATIO, 1.0 / DOWNSAMPLE_RATIO);
 
         distMapBGR(preVideoFrame, nextVideoFrame, dist);
 
-  			curVideoFrame.copyTo(preVideoFrame);
-  			nextVideoFrame.copyTo(curVideoFrame);
+		curVideoFrame.copyTo(preVideoFrame);
+		nextVideoFrame.copyTo(curVideoFrame);
 
-  			blur(dist, blurDist, Size(3, 3));
+		blur(dist, blurDist, Size(3, 3));
 
-  			threshold(blurDist, threDist, 100, 255, THRESH_BINARY);
+		threshold(blurDist, threDist, 100, 255, THRESH_BINARY);
 
-  			meanStdDev(threDist, meanDist, stdDist);
+		meanStdDev(threDist, meanDist, stdDist);
 
-  			sprintf(text, "STD - %d", stdDist.at<uchar>(0, 0));
+		sprintf(text, "STD - %d", stdDist.at<uchar>(0, 0));
 
-  			cv::putText(curVideoFrame, text, Point(20, 20), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 20);
+		cv::putText(curVideoFrame, text, Point(20, 20), FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 1, 20);
 
-  			if(stdDist.at<uchar>(0, 0) > MOTION_THRESH) {
-                motion_flag = 1;
-  				printf("%d motion detected\r", stdDist.at<uchar>(0, 0));
-  				fflush(stdout);
-  			} else {
-              motion_flag = 0;
+		if(stdDist.at<uchar>(0, 0) > MOTION_THRESH) {
+            motion_flag = 1;
+			LOGD("%d motion detected", stdDist.at<uchar>(0, 0));
+		} else {
+            motion_flag = 0;
+        }
+
+        // apply face recognition if motion detected
+        if(motion_flag) {
+            Mat original = croppedVideoFrame.clone();
+            Mat gray;
+            cvtColor(original, gray, COLOR_BGR2GRAY);
+            // Find the faces in the frame:
+            vector< Rect_<int> > faces;
+            haar_cascade.detectMultiScale(gray, faces);
+            // At this point you have the position of the faces in
+            // faces. Now we'll get the faces, make a prediction and
+            // annotate it in the video. Cool or what?
+            for(size_t i = 0; i < faces.size(); i++) {
+                // Process face by face:
+                Rect face_i = faces[i];
+                // Crop the face from the image. So simple with OpenCV C++:
+                Mat face = gray(face_i);
+                // Resizing the face is necessary for Eigenfaces and Fisherfaces. You can easily
+                // verify this, by reading through the face recognition tutorial coming with OpenCV.
+                // Resizing IS NOT NEEDED for Local Binary Patterns Histograms, so preparing the
+                // input data really depends on the algorithm used.
+                //
+                // I strongly encourage you to play around with the algorithms. See which work best
+                // in your scenario, LBPH should always be a contender for robust face recognition.
+                //
+                // Since I am showing the Fisherfaces algorithm here, I also show how to resize the
+                // face you have just found:
+                Mat face_resized;
+                cv::resize(face, face_resized, Size(im_width, im_height), 1.0, 1.0, INTER_CUBIC);
+                // Now perform the prediction, see how easy that is:
+                int prediction = model->predict(face_resized);
+                // And finally write all we've found out to the original image!
+                // First of all draw a green rectangle around the detected face:
+                rectangle(original, face_i, Scalar(0, 255,0), 1);
+                // Create the text we will annotate the box with:
+                string box_text = format("Prediction = %d", prediction);
+                LOGD(box_text.c_str());
+                // Calculate the position for annotated text (make sure we don't
+                // put illegal values in there):
+                int pos_x = std::max(face_i.tl().x - 10, 0);
+                int pos_y = std::max(face_i.tl().y - 10, 0);
+                // And now put it into the image:
+                putText(original, box_text, Point(pos_x, pos_y), FONT_HERSHEY_PLAIN, 1.0, Scalar(0,255,0), 2);
             }
+            // Show the result:
+            // imshow("face_recognizer", original);
+        }
 
   		// imshow("distMap", blurDist);
   		// imshow("preview", curVideoFrame);
-        //
+
         // waitKey(1);
 
-         // set watermark
-         venc_cam_cxt->waterMark->bgInfo.y = (unsigned char *) input_buffer.pAddrVirY;
-         venc_cam_cxt->waterMark->bgInfo.c = (unsigned char *) input_buffer.pAddrVirC;
-         waterMarkShowTime(venc_cam_cxt->waterMark);
+        // set watermark
+        venc_cam_cxt->waterMark->bgInfo.y = (unsigned char *) input_buffer.pAddrVirY;
+        venc_cam_cxt->waterMark->bgInfo.c = (unsigned char *) input_buffer.pAddrVirC;
+        waterMarkShowTime(venc_cam_cxt->waterMark);
     } else {
         //LOGD("Cam - convert from yuyv1 =%d\n", Y_size );
         memcpy((unsigned char *) input_buffer.pAddrVirY, buffer, Y_size);
@@ -472,6 +539,24 @@ void decode_sps_pps(VencHeaderData sps_pps_data) {
     memcpy(metaData.Pps, sps_pps_buf + pps_head, pps_length);
 }
 
+static void read_csv(const string& filename, vector<Mat>& images, vector<int>& labels, char separator = ';') {
+    std::ifstream file(filename.c_str(), ifstream::in);
+    if (!file) {
+        string error_message = "No valid input file was given, please check the given filename.";
+        CV_Error(CV_StsBadArg, error_message);
+    }
+    string line, path, classlabel;
+    while (getline(file, line)) {
+        stringstream liness(line);
+        getline(liness, path, separator);
+        getline(liness, classlabel);
+        if(!path.empty() && !classlabel.empty()) {
+            images.push_back(imread(path, 0));
+            labels.push_back(atoi(classlabel.c_str()));
+        }
+    }
+}
+
 
 int main(int argc, char **argv) {
     time_t time_start, time_now;
@@ -504,6 +589,36 @@ int main(int argc, char **argv) {
     printf("Size Image = %dx%d\n", mwidth, mheight);
     printf("Y_size = %d\n", Y_size);
     printf("UV_size = %d\n", UV_size);
+
+    // init face recognition
+    // Read in the data (fails if no valid input filename is given, but you'll get an error message):
+    try {
+        read_csv(fn_csv, images, labels);
+    } catch (cv::Exception& e) {
+        cerr << "Error opening file \"" << fn_csv << "\". Reason: " << e.msg << endl;
+        // nothing more we can do
+        exit(1);
+    }
+    // Get the height from the first image. We'll need this
+    // later in code to reshape the images to their original
+    // size AND we need to reshape incoming faces to this size:
+    try {
+        im_width = images[0].cols;
+        im_height = images[0].rows;
+    } catch(Exception& e) {
+        cerr << "Error opening file \"" << fn_csv << "\". Reason: " << e.msg << endl;
+        exit(1);
+    }
+    LOGD("im_width x im_height %d x %d\n", im_width, im_height);
+
+    model = createEigenFaceRecognizer();
+    model->train(images, labels);
+    // That's it for learning the Face Recognition model. You now
+    // need to create the classifier for the task of Face Detection.
+    // We are going to use the haar cascade you have specified in the
+    // command line arguments:
+    //
+    haar_cascade.load(fn_haar);
 
     //* h264 param
     h264Param.bEntropyCodingCABAC = 1;
