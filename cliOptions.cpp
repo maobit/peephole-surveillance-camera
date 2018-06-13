@@ -58,9 +58,9 @@ static struct option long_options[] =
 
 
 static void help() {
-    printf("H264 Encoder using H/W Accelerated For H3 SOCs - Version: %s\n", ENC_VER);
-    printf("Copyright (c) 2016 Rosimildo DaSilva - <rosimildo . at . gmail.com>\n");
-    printf("Usage: videoenc <options>:\n");
+    // printf("H264 Encoder using H/W Accelerated For H3 SOCs - Version: %s\n", ENC_VER);
+    // printf("Copyright (c) 2016 Rosimildo DaSilva - <rosimildo . at . gmail.com>\n");
+    printf("Usage: peephole_camera <options>:\n");
     printf("   --input,-i        - input source           ( default = [-] pipe source                 )\n");
     printf("   --rtmp-url,-c     - rtmp server url        ( default = rtmp://192.168.2.114:1935/live  ) \n");
     printf("   --bitrate,-b      - bit rate in Kbits/Sec  ( default = 1024                            )\n");
