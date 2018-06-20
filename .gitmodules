@@ -1,0 +1,6 @@
+[submodule "profile"]
+	path = profile
+	url = git://github.com/qheuestc/my_linux_profile.git
+[submodule "libyuv"]
+	path = libyuv
+	url = https://chromium.googlesource.com/libyuv/libyuv
