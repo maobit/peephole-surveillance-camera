@@ -36,9 +36,11 @@ $ sudo ldconfig
 ### 2. Build libyuv
 Just run following commands:
 ```shell
-$ cd libyuv/;
-$ make -f linux.mk CXX="g++ -mfpu=neon" libyuv.a;
-$ cd ../;
+$ git submodule init
+$ git submodule update
+$ cd libyuv/
+$ make -f linux.mk CXX="g++ -mfpu=neon" libyuv.a
+$ cd ../
 ```
 
 ### 3. Build this repository
