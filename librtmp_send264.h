@@ -1,75 +1,80 @@
 /**
  * Simplest Librtmp Send 264
  *
- * 雷霄骅，张晖
+ * 锟斤拷锟斤拷锟借，锟斤拷锟斤拷
  * leixiaohua1020@126.com
  * zhanghuicuc@gmail.com
- * 中国传媒大学/数字电视技术
+ * 锟叫癸拷锟斤拷媒锟斤拷学/锟斤拷锟街碉拷锟接硷拷锟斤拷
  * Communication University of China / Digital TV Technology
  * http://blog.csdn.net/leixiaohua1020
  *
- * 本程序用于将内存中的H.264数据推送至RTMP流媒体服务器。
+ * 锟斤拷锟斤拷锟斤拷锟斤拷锟节斤拷锟节达拷锟叫碉拷H.264锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷RTMP锟斤拷媒锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷
  *
  */
 
 /**
  * _NaluUnit
- * 内部结构体。该结构体主要用于存储和传递Nal单元的类型、大小和数据
- */ 
-typedef struct _NaluUnit  
-{  
-	int type;  
-    int size;  
-	unsigned char *data;  
+ * 锟节诧拷锟结构锟藉。锟矫结构锟斤拷锟斤拷要锟斤拷锟节存储锟酵达拷锟斤拷Nal锟斤拷元锟斤拷锟斤拷锟酵★拷锟斤拷小锟斤拷锟斤拷锟斤拷
+ */
+
+#ifndef __LIBRTMP_SEND264_H__
+#define __LIBRTMP_SEND264_H__
+
+typedef struct _NaluUnit
+{
+	int type;
+    int size;
+	unsigned char *data;
 }NaluUnit;
 
 /**
  * _RTMPMetadata
- * 内部结构体。该结构体主要用于存储和传递元数据信息
- */ 
-typedef struct _RTMPMetadata  
-{  
-	// video, must be h264 type   
-	unsigned int    nWidth;  
-	unsigned int    nHeight;  
-	unsigned int    nFrameRate;      
-	unsigned int    nSpsLen;  
-	unsigned char   *Sps;  
-	unsigned int    nPpsLen;  
-	unsigned char   *Pps;   
-} RTMPMetadata,*LPRTMPMetadata;  
+ * 锟节诧拷锟结构锟藉。锟矫结构锟斤拷锟斤拷要锟斤拷锟节存储锟酵达拷锟斤拷元锟斤拷锟斤拷锟斤拷息
+ */
+typedef struct _RTMPMetadata
+{
+	// video, must be h264 type
+	unsigned int    nWidth;
+	unsigned int    nHeight;
+	unsigned int    nFrameRate;
+	unsigned int    nSpsLen;
+	unsigned char   *Sps;
+	unsigned int    nPpsLen;
+	unsigned char   *Pps;
+} RTMPMetadata,*LPRTMPMetadata;
 
-enum  
-{  
-	 VIDEO_CODECID_H264 = 7,  
-}; 
+enum
+{
+	 VIDEO_CODECID_H264 = 7,
+};
 
 /**
- * 初始化并连接到服务器
+ * 锟斤拷始锟斤拷锟斤拷锟斤拷锟接碉拷锟斤拷锟斤拷锟斤拷
  *
- * @param url 服务器上对应webapp的地址
- *					
- * @成功则返回1 , 失败则返回0
- */ 
-int RTMP264_Connect(const char* url);    
-    
+ * @param url 锟斤拷锟斤拷锟斤拷锟较讹拷应webapp锟侥碉拷址
+ *
+ * @锟缴癸拷锟津返伙拷1 , 失锟斤拷锟津返伙拷0
+ */
+int RTMP264_Connect(const char* url);
+
 /**
- * 将内存中的一段H.264编码的视频数据利用RTMP协议发送到服务器
+ * 锟斤拷锟节达拷锟叫碉拷一锟斤拷H.264锟斤拷锟斤拷锟斤拷锟斤拷频锟斤拷锟斤拷锟斤拷锟斤拷RTMP协锟介发锟酵碉拷锟斤拷锟斤拷锟斤拷
  *
- * @param read_buffer 回调函数，当数据不足的时候，系统会自动调用该函数获取输入数据。
- *					2个参数功能：
- *					uint8_t *buf：外部数据送至该地址
- *					int buf_size：外部数据大小
- *					返回值：成功读取的内存大小
- * @成功则返回1 , 失败则返回0
- */ 
+ * @param read_buffer 锟截碉拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟捷诧拷锟斤拷锟斤拷时锟斤拷锟斤拷系统锟斤拷锟皆讹拷锟斤拷锟矫该猴拷锟斤拷锟斤拷取锟斤拷锟斤拷锟斤拷锟捷★拷
+ *					2锟斤拷锟斤拷锟斤拷锟斤拷锟杰ｏ拷
+ *					uint8_t *buf锟斤拷锟解部锟斤拷锟斤拷锟斤拷锟斤拷锟矫碉拷址
+ *					int buf_size锟斤拷锟解部锟斤拷锟捷达拷小
+ *					锟斤拷锟斤拷值锟斤拷锟缴癸拷锟斤拷取锟斤拷锟节达拷锟斤拷小
+ * @锟缴癸拷锟津返伙拷1 , 失锟斤拷锟津返伙拷0
+ */
 int RTMP264_Send(int (*read_buffer)(unsigned char *buf, int buf_size));
 
 /**
- * 断开连接，释放相关的资源。
+ * 锟较匡拷锟斤拷锟接ｏ拷锟酵凤拷锟斤拷锟截碉拷锟斤拷源锟斤拷
  *
- */    
-void RTMP264_Close();  
+ */
+void RTMP264_Close();
 
 int SendH264Packet(unsigned char *data,unsigned int size,int bIsKeyFrame,unsigned int nTimeStamp);
 
+#endif

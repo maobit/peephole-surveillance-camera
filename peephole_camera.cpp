@@ -1,23 +1,3 @@
-/*
- * Copyright (c) 2016 Rosimildo DaSilva <rosimildo@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301, USA.
- *
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +21,9 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+
+#include "utils.h"
+#include "motion.h"
 
 #include "aw/vencoder.h"
 #define LOG_TAG "main"
@@ -91,13 +74,7 @@ MotionParam motionParam;
 VENC_CODEC_TYPE codecType = VENC_CODEC_H264;
 
 // for rtmp
-extern unsigned int  m_nFileBufSize;
-extern unsigned int  nalhead_pos;
-extern RTMP* m_pRtmp;
 extern RTMPMetadata metaData;
-extern unsigned char *m_pFileBuf;
-extern unsigned char *m_pFileBuf_tmp;
-extern unsigned char* m_pFileBuf_tmp_old;  //used for realloc
 
 Mat cameraYUV = Mat::zeros(mheight * 1.5, mwidth, CV_8UC1);
 Mat cameraBGR = Mat::zeros(mheight, mwidth, CV_8UC3);
@@ -156,47 +133,6 @@ typedef struct Venc_context {
 SimpleFIFO<VencInputBuffer, 2> g_inFIFO;
 pthread_cond_t g_cond(PTHREAD_COND_INITIALIZER);
 pthread_mutex_t g_mutex(PTHREAD_MUTEX_INITIALIZER);
-
-void distMapBGR(const Mat &a, const Mat &b, Mat &out){
-	// #pragma omp parallel
-	for(int y = 0; y < a.rows; ++y){
-		for(int x = 0; x < a.cols; ++x){
-			int summary = 0;
-			for(int z = 0; z < a.dims; ++z){
-				summary += pow(a.at<Vec3b>(y, x)[z] - b.at<Vec3b>(y, x)[z], 2);
-			}
-			out.at<uchar>(y, x) = (int) (255.0 * sqrt(summary) / sqrt(3 * pow(255, 2)));
-		}
-	}
-}
-
-/**
-* creating directories if none existing
-*/
-int mkdirs(char *muldir) {
-    int i, len;
-    char str[512];
-    strncpy(str, muldir, 512);
-    len = strlen(str);
-    for(i=0; i<len; i++) {
-        if(str[i]=='/') {
-            str[i] = '\0';
-            if(access(str, 0)!=0) {
-                if(mkdir(str, 0777)) {
-                    return -1;
-                }
-            }
-            str[i]='/';
-        }
-    }
-    if(len > 0 && access(str, 0) != 0) {
-        if(mkdir(str, 0777)) {
-          return -1;
-        }
-    }
-    return 0;
-}
-
 
 void process_in_buffer(Venc_context *venc_cxt, VencInputBuffer *input_buffer);
 
@@ -392,39 +328,20 @@ int CameraSourceCallback(void *cookie, void *data) {
             // Find the faces in the frame:
             vector< Rect_<int> > faces;
             haar_cascade.detectMultiScale(gray, faces);
-            // At this point you have the position of the faces in
-            // faces. Now we'll get the faces, make a prediction and
-            // annotate it in the video. Cool or what?
             for(size_t i = 0; i < faces.size(); i++) {
                 // Process face by face:
                 Rect face_i = faces[i];
                 // Crop the face from the image. So simple with OpenCV C++:
                 Mat face = gray(face_i);
-                // Resizing the face is necessary for Eigenfaces and Fisherfaces. You can easily
-                // verify this, by reading through the face recognition tutorial coming with OpenCV.
-                // Resizing IS NOT NEEDED for Local Binary Patterns Histograms, so preparing the
-                // input data really depends on the algorithm used.
-                //
-                // I strongly encourage you to play around with the algorithms. See which work best
-                // in your scenario, LBPH should always be a contender for robust face recognition.
-                //
-                // Since I am showing the Fisherfaces algorithm here, I also show how to resize the
-                // face you have just found:
+
                 Mat face_resized;
                 cv::resize(face, face_resized, Size(im_width, im_height), 1.0, 1.0, INTER_CUBIC);
-                // Now perform the prediction, see how easy that is:
                 int prediction = model->predict(face_resized);
-                // And finally write all we've found out to the original image!
-                // First of all draw a green rectangle around the detected face:
                 rectangle(original, face_i, Scalar(0, 255,0), 1);
-                // Create the text we will annotate the box with:
                 string box_text = format("Prediction = %d", prediction);
-                LOGD(box_text.c_str());
-                // Calculate the position for annotated text (make sure we don't
-                // put illegal values in there):
+                // LOGD(box_text.c_str());
                 int pos_x = std::max(face_i.tl().x - 10, 0);
                 int pos_y = std::max(face_i.tl().y - 10, 0);
-                // And now put it into the image:
                 putText(original, box_text, Point(pos_x, pos_y), FONT_HERSHEY_PLAIN, 1.0, Scalar(0,255,0), 2);
             }
             // Show the result:
@@ -516,47 +433,6 @@ void handle_int(int n) {
     quit = 1;
 }
 
-void decode_sps_pps(VencHeaderData sps_pps_data) {
-    unsigned char *sps_pps_buf = sps_pps_data.pBuffer;
-    int tail =0;
-    int sps_head = 0, sps_length = 0;
-    int pps_head = 0, pps_length = 0;
-    while(tail < sps_pps_data.nLength) {
-        if(sps_pps_buf[tail] == 0x67) {
-            sps_head = tail;
-        } else if(sps_pps_buf[tail] == 0x68) {
-            pps_head = tail;
-        }
-        tail++;
-    }
-    sps_length = pps_head - sps_head - 4;
-    pps_length = sps_pps_data.nLength - pps_head;
-    metaData.nSpsLen = sps_length;
-    metaData.nPpsLen = pps_length;
-    metaData.Sps = (unsigned char*) malloc(sizeof(unsigned char) * sps_length);
-    metaData.Pps = (unsigned char*) malloc(sizeof(unsigned char) * pps_length);
-    memcpy(metaData.Sps, sps_pps_buf + sps_head, sps_length);
-    memcpy(metaData.Pps, sps_pps_buf + pps_head, pps_length);
-}
-
-static void read_csv(const string& filename, vector<Mat>& images, vector<int>& labels, char separator = ';') {
-    std::ifstream file(filename.c_str(), ifstream::in);
-    if (!file) {
-        string error_message = "No valid input file was given, please check the given filename.";
-        CV_Error(CV_StsBadArg, error_message);
-    }
-    string line, path, classlabel;
-    while (getline(file, line)) {
-        stringstream liness(line);
-        getline(liness, path, separator);
-        getline(liness, classlabel);
-        if(!path.empty() && !classlabel.empty()) {
-            images.push_back(imread(path, 0));
-            labels.push_back(atoi(classlabel.c_str()));
-        }
-    }
-}
-
 
 int main(int argc, char **argv) {
     time_t time_start, time_now;
@@ -593,15 +469,13 @@ int main(int argc, char **argv) {
     // init face recognition
     // Read in the data (fails if no valid input filename is given, but you'll get an error message):
     try {
-        read_csv(fn_csv, images, labels);
+        read_csv(fn_csv, images, labels, ';');
     } catch (cv::Exception& e) {
         cerr << "Error opening file \"" << fn_csv << "\". Reason: " << e.msg << endl;
         // nothing more we can do
         exit(1);
     }
-    // Get the height from the first image. We'll need this
-    // later in code to reshape the images to their original
-    // size AND we need to reshape incoming faces to this size:
+
     try {
         im_width = images[0].cols;
         im_height = images[0].rows;
@@ -613,11 +487,7 @@ int main(int argc, char **argv) {
 
     model = createEigenFaceRecognizer();
     model->train(images, labels);
-    // That's it for learning the Face Recognition model. You now
-    // need to create the classifier for the task of Face Detection.
-    // We are going to use the haar cascade you have specified in the
-    // command line arguments:
-    //
+
     haar_cascade.load(fn_haar);
 
     //* h264 param

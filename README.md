@@ -6,7 +6,7 @@ It has following features:
 1. H264 encoding using Allwinner's SOC H/W H.264 encoder
 2. RTMP streaming : you can push video stream to an rtmp server
 3. Motion detection : recoding for 5s when motion detected
-4. [TODO] Face recognition
+4. Face recognition : based on OpenCV EigenFaceRecognizer
 
 
 #  Compiling

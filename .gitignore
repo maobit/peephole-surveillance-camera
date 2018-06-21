@@ -31,3 +31,4 @@ rtmp_camera
 *.pdf
 core
 peephole_camera
+faces.csv
